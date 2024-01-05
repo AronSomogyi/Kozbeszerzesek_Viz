@@ -1,0 +1,343 @@
+---
+title: "2. Beadandó"
+author: "Somogyi Áron - F2FJYM"
+date: "2022-12-16"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = F, warning=FALSE, message = F)
+library(tidyverse)
+library(psych)
+kozbeszerzes <- read.csv("/Users/aaron/Desktop/EGYETEM/R/2022_crcb_hpp_0521_data_010622/2022_crcb_hpp_0521_data_010622.csv", header = TRUE, na.strings = c("", " ", "-"))
+df_kozbeszerzes <- kozbeszerzes %>% 
+  mutate(cdate_raw = na_if(cdate_raw, "0000-00-00")) %>% 
+  mutate_at(vars(fwa1,fwa2,fwa3,fwa4,fwa,fwa_string,eu,pp_desc_raw,pp_type_raw,agreement_raw,contract_type_raw,sector,wname_raw), factor) %>% 
+  mutate_at(vars(cdate_raw), as.Date) %>% 
+  select(-url,-nissuer_raw,-publ_date_raw,-contract_desc_raw,-cdate_raw, -bname_raw,-bname2_raw,-value_est_raw,-offg_num_raw,-notice_type_raw,-pp_cpv_raw,-notice_detail_raw,-nbid,-fwa1,-fwa2,-fwa3,-fwa4,-fwa,-fwa_string,-pp_desc_raw) %>% 
+  mutate(nevalue = nevalue/1000000) %>% 
+  mutate(ncvalue = ncvalue/1000000) %>% 
+  distinct() %>% 
+  mutate(contract_type_raw = case_when(
+    str_detect(contract_type_raw, "Epit") ~ "Epites",
+    str_detect(contract_type_raw, "Szolgaltatas") ~ "Szolgaltatas",
+    str_detect(contract_type_raw, "Arubeszerzes") ~ "Adasvetel",
+    str_detect(contract_type_raw, "Adasvetel") ~ "Adasvetel",
+    str_detect(contract_type_raw, "Tervezes") ~ "Epites"))
+df_kozbeszerzes$contract_type_raw <-  as.factor(df_kozbeszerzes$contract_type_raw)
+
+```
+
+## Bevezetés
+
+A következő feladatban a magyar közbeszerzések 2005-2021 közötti adatbázisát fogom használni. A változók közül a következőket fogom vizsgálni: közbeszerzés éve (year_raw), beérkezett ajánlatok száma (cbidders_raw), győztes neve (wname_raw), szerződés típusa (contract_type_raw), szeződés szerinti nettó érték (ncvalue), nettó becsült érték (nevalue), utóbbi kettő közül a nettó becsült értékre fókuszálva. Továbbá: szektor (sector), és, hogy európai uniós beruházás-e (eu). Az adatbázis mérete hatalmas, így rengeteg egyéb változót kiszűrtem, illetve hosszas adattisztítás után a megmaradtakat amennyire tudtam leegyszerűsítettem. A célom nem korrupciókutatás a következő adatbázis használata során, hanem egyszerűen az adatbázis bemutatása.
+
+## Leíró Statisztika
+
+```{r}
+describe(df_kozbeszerzes)
+```
+
+Az adatbázisban 268799 elem található (a hiányzó értékek miatt a táblázatban ez nem mindenhol köszön vissza).
+
+### Ajánlatok száma
+
+Ha ránézünk az ajánlattevők számára, azt láthatjuk, hogy az adatok alapján az összes közbeszerzés (legalább) felére maximum kettő ajánlat érkezett. Átlagosan pedig 5.39 ajánlat született egy-egy közbeszerzésre. A legtöbb ajánlattal rendelkező közbeszerznél 9288-at számolhatunk míg volt olyan, amelynél nullát. Megoszlása tehát nem normális, erősen jobbra elnyúló.
+
+Elkészítettem egy Pareto-ábrát, amely megmutatja ennek a változónak tényleges megoszlását, illetve kummulatív megoszlását. Az ábráról könnyen leolvasható, hogy az esetek kb. 80 százalékában 4, vagy kevesebb ajánlat; 10 ajánlatnál több, pedig kevesebb, mint az esetek 10 százalékában lett téve.
+
+```{r}
+cbidders_pareto <- df_kozbeszerzes %>% 
+  select(cbidders_raw) %>% 
+  count(cbidders_raw) %>% 
+  mutate(cumulative = cumsum(n)) %>% 
+  mutate(cum_perc = cumulative/sum(n)*100) %>% 
+  mutate(freq=n)
+
+pareto_arany <- 100/max(cbidders_pareto$freq)
+
+
+
+ggplot(cbidders_pareto, aes(x=cbidders_raw, y=freq))+
+  geom_col(fill="#6391C9")+
+  xlim(0,10)+
+  geom_point(aes(y=cum_perc/pareto_arany), color="red")+
+  geom_path(aes(y=cum_perc/pareto_arany), group=1, alpha=0.4, color="#36719E")+
+  scale_y_continuous(sec.axis = sec_axis(~.*100/max(cbidders_pareto$freq),name = "Kummulatív megoszlás (%)"))+
+  theme_minimal()+
+  scale_x_continuous(limits = c(-1,11), breaks = c(0:10))+
+  labs(title = "Ajánlatok számának megoszlása")+
+  labs(x="Ajánlatok száma", y="Megoszlás") + theme(plot.subtitle = element_text(family = "serif"),
+    axis.ticks = element_line(colour = "gray38"),
+    panel.grid.major = element_line(colour = "gray95"),
+    axis.title = element_text(family = "serif"),
+    axis.text = element_text(family = "serif"),
+    plot.title = element_text(family = "serif",
+        face = "bold", hjust = 0.5))
+```
+
+Azt is megfigyelhetjük, hogy a nagy értékű beruházásokra mennyien tettek ajánlatot. A következő ábrát lekorlátoztam 50 milliárdos beruházásokig, de így is szemlélteti, hogy a nagyobb összegekre kevesebben pályáznak. Ugyanez a megállapítás igaz, mindegy, hogy EU-s beruházás, vagy állami.
+
+```{r}
+ ggplot(df_kozbeszerzes) +
+ aes(x = cbidders_raw, y = nevalue, colour = eu) +
+ geom_jitter(size = 0.5) +
+ scale_color_hue(direction = 1, 
+                 labels=c('Nem','Igen','Nem ismert')) +
+ labs(x = "Pályázók száma", y = "Közbeszerzés nettó értéke (Millió Ft)", 
+ color = "EU-s beruházás") +
+ theme_minimal() +
+ theme(legend.position = "bottom") +
+ xlim(0, 500) +
+ ylim(0, 50000)+ 
+  theme(axis.title = element_text(family = "serif"),
+    plot.title = element_text(family = "serif"),
+    legend.text = element_text(family = "serif"),
+    legend.title = element_text(family = "serif"),
+    legend.direction = "horizontal")
+```
+
+### Hogy nézett ki a közbeszerzések összértékének éves megoszlása?
+
+Leolvasható a következő ábrán, hogy a legkevesebb összértékű közbeszerzések 2011-ben történtek (talán kormányváltási konszolidáció miatt). Még ez is hatalmas összeg, közel ezermilliárd forint. A legnagyobb összeg ennek több, mint nyolcszorosa, a 2015-ös nyolcezer-milliárd forint.
+
+```{r}
+evi_netto <- df_kozbeszerzes %>% 
+  group_by(year_raw) %>% 
+  summarise(evi_netto = sum(nevalue, na.rm=T))
+
+ggplot(evi_netto, aes(x=year_raw, y= evi_netto, fill=year_raw))+
+  geom_col(position = "stack", width = 0.9)+
+  theme_minimal()+
+  scale_x_continuous(limits = c(2004, 2022), breaks = c(2005:2021))+
+  scale_fill_gradient(low = "#2C4B70", high= "#4B6E99")+
+  theme(panel.grid.major.x=element_blank(),
+        panel.grid.minor.x = element_blank()) + theme(axis.title = element_text(family = "serif"),
+    axis.text = element_text(family = "serif"),
+    plot.title = element_text(family = "serif",
+        face = "bold", hjust = 0.5)) +labs(title = "Közbeszerzések évi összege",
+    x = NULL, y = "Összérték (Millió Ft)") + theme(legend.position = "none")+
+  scale_y_continuous(labels = c("", "2 Millió", "4 Millió", "6 Millió","8 Millió"))
+```
+
+### Közbeszerzések éves megoszlása.
+
+Itt azt láthatjuk, hogy aze első három vizsgált évhez képest nőtt a közbeszerzések száma. A legtöbb 2014-ben és 2015-ben történt.
+
+```{r}
+library(tidyverse)
+ggplot(df_kozbeszerzes, aes(x=year_raw))+
+  geom_bar( width = 0.9, fill="#4B6E99")+
+  theme_minimal()+
+  scale_x_continuous(limits = c(2004, 2022), breaks = c(2005:2021))+
+  theme(panel.grid.major.x=element_blank(),
+        panel.grid.minor.x = element_blank()) + theme(axis.title = element_text(family = "serif"),
+    axis.text = element_text(family = "serif"),
+    plot.title = element_text(family = "serif",
+        face = "bold", hjust = 0.5)) +labs(title = "Közbeszerzések évenkénti megoszlása",
+    x = NULL, y = NULL) + theme(legend.position = "none")
+```
+
+Nem mutat sok összefüggést tehát a beszerzések évenkénti értéke és az évenkénti darabszámuk.
+
+### Nyertesek száma
+
+A nyertesek számának éves megoszlását is elkészítettem. A következő ábrán látható, hogy mely évben hány különböző személy, vagy cég nyert közbeszerzést. Leolvasható, hogy 2005-ben kevesebb, mint 2500 különböző cég, vagy személy nyert közbeszerzést, ez körülbelül a 2008-as kormányválság, majd Bajnai-kormányzás alatt növekedni kezdett. A legmagasabb értéket a 2014-es évben vette fel, itt is és az ezt követő évben is 10000-nél valamivel több különböző jogi személy nyert közbeszerzést.
+
+A közbeszerzések évi összegéhez viszonyítva érdekesnek találtam, hogy 2015-ben és 2016-ban nagyjából hasonló mennyiségű nyertes volt, viszont az összértéke ezeknek a beszerzéseknek 2015-ben több, mint 2 és félszerese a 2016-osnak.
+
+```{r}
+wname_evi <- df_kozbeszerzes %>% 
+  group_by(year_raw) %>% 
+  summarise(nyertesek_szama = length(unique(wname_raw)), kifizetes = sum(nevalue, na.rm = T))
+
+ggplot(wname_evi, aes(x=year_raw, y=nyertesek_szama, fill=year_raw))+
+  geom_col()+
+  theme_minimal() + theme(panel.grid.major = element_line(colour = "gray96"),
+    panel.grid.minor = element_line(colour = "gray95"),
+    axis.title = element_text(family = "serif"),
+    axis.text = element_text(family = "serif")) +labs(x = "Év", y = "Nyertesek száma")+
+  scale_fill_gradient(low = "#2C4B70", high= "#4B6E99") + 
+  theme(legend.position = "none") + theme(plot.title = element_text(family = "serif",
+    face = "bold", hjust = 1)) +labs(title = "Különböző közbeszerzés-győztesek megoszlása 2005 és 2021 között Magyarországon",
+    x = NULL)+
+  scale_x_continuous(limits = c(2004,2022), breaks = c(2005:2021))+
+  theme(panel.grid.major.x=element_blank(),
+        panel.grid.minor.x = element_blank())
+```
+
+## Top 1%
+
+A közbeszerzések becsült nettó értékének leíró statisztikái hatalmas kiugrásokról árulkodnak:
+
+```{r}
+summary(sort(df_kozbeszerzes$nevalue, decreasing = T))
+```
+
+Emiatt érdekelni kezdett a legmagasabb 1% kifizetés értéke, és ennek a részesedésnek az aránya az összes kifizetésből.
+
+```{r}
+paste("A legnagyobb 1% kifizetés értéke (Millió Ft): ",sum(head(sort(df_kozbeszerzes$nevalue, decreasing = T), n=nrow(df_kozbeszerzes)/100)))
+paste("Ennek aránya az összes kifizetésből: ",sum(head(sort(df_kozbeszerzes$nevalue, decreasing = T), n=nrow(df_kozbeszerzes)/100))/sum(df_kozbeszerzes$nevalue, na.rm = T)*100,"%")
+print("Ennek a kettőnek aránya egy kördiagramon, ahol a türkiz szín jelenti a top 1 százalékot:")
+top1arany <- tibble(x1=c("A","B"), x2=c(100-66.8793309710436, 66.8793309710436))
+ggplot(top1arany, aes(x="",y=x2, fill=x1))+
+  geom_bar(stat="identity", width = 1)+
+  coord_polar("y", start = 0)+
+  theme_void()+
+  theme(legend.position = "none")
+```
+
+A legjobb 1% közbeszerzésnek valamelyest hasonló megoszlása van, mint az összes közbeszerzés évenkénti megoszlásának. Kivéve ez alól a 2005-2008-2009-es évek, ahol a drága beruházások jóval nagyobb arányban voltak jelen arányaiban, mint a későbbi években. 2010-2011-2012-ben pedig kevesebb beruházás került ebbe a top kategóriába, mint ahogy ugyanezek az évek aránylanak az összes közbeszerzéshez.
+
+```{r}
+top_1_szazaelek_kifizetes <-  df_kozbeszerzes %>% 
+  filter(nevalue %in% head(sort(df_kozbeszerzes$nevalue, decreasing = T), n=nrow(df_kozbeszerzes)/100))
+top_1_szazelek_kifizetes_evi <-  top_1_szazaelek_kifizetes %>% 
+  group_by(year_raw) %>% 
+  summarise(kozbeszerzes_db = length(year_raw), penz_ev_millio = sum(nevalue, na.rm=T))
+
+ggplot(top_1_szazelek_kifizetes_evi)+
+  geom_col(aes(x=year_raw, y=kozbeszerzes_db, fill=year_raw), alpha=0.95)+
+  geom_line(aes(x=year_raw,
+                y=penz_ev_millio/26554.8261363636),
+            color = "red")+
+  theme_minimal()+
+  scale_y_continuous(sec.axis = sec_axis(~.*26554.8261363636, 
+                                         name="Közbeszerzések összértéke (Millió Ft)")) + 
+  theme(axis.title = element_text(family = "serif")) +
+  labs(x = "Év", 
+       y = "Közbeszerzések évi mennyisége")+
+  theme(axis.ticks.y.right = element_line(color = "red"),
+        axis.title.y.right = element_text(color = "red"),
+        axis.text.y.right = element_text(color = "red"),
+        legend.position = "none",
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor.x = element_blank())+
+  scale_fill_gradient(low = "#33385C", high= "#4B6E99") + theme(axis.text = element_text(family = "serif"),
+    plot.title = element_text(family = "serif",
+        face = "bold", hjust = 0.5)) +labs(title = "A közbeszerzések legjobb 1%-ának évi megoszlása és értéke",
+    x = NULL)+
+  scale_x_continuous(limits = c(2004,2022), breaks = c(2005:2021))
+
+```
+
+## Szektorok megoszlása
+
+A következő ábrán látható a szektorok megoszlása az általuk szerzett beszerzések becsült értéke alapján.
+
+Mivel a közbeszerzések döntő része milliós nagyságrendű volt, amelyhez képest viszont nagy kiugrás a (sok)milliárdos beszerzés, logaraitmikus megoszlást készítettem, simított megoszlás-ábrán. Az első az egymáshoz való viszonyítást segíti. Ezen látszódik, hogy jellemzően az 1-es szektorban való beruházások esetén számíthatunk a legkevesebb pénzre, míg a 7-es és 5-ös szektorban számottevő a tíz-százmilliárdos befektetés is. (Megjegyzés: az első ábrán a nyolcas szektor a Nem ismert kategória.)
+
+```{r}
+library(tidyverse)
+df_kozbeszerzes %>% 
+  ggplot(aes(x = nevalue, fill = sector)) +
+  geom_density(adjust = 1L,
+               alpha=0.8) +
+  scale_fill_manual(values = c(`1` = "#FBB4AE", 
+                               `2` = "#B6D1DE", `3` = "#D1E1CD", `4` = "#EBD1C9", `5` = "#03FFF3", `6` = "#ECE3C1", `7` = "#FF84B2", 
+                               `8` = "#F2F2F2")) +
+  scale_x_continuous(trans = "log10") +
+  theme_minimal() + 
+  theme(axis.ticks = element_line(linetype = "blank"),
+    axis.title = element_text(family = "serif"),
+    axis.text = element_text(family = "serif"),
+    axis.text.x = element_text(family = "serif"),
+    axis.text.y = element_text(family = "serif"),
+    plot.title = element_text(family = "serif",
+        face = "bold", hjust = 0.5)) +
+  labs(title = "Szektorok megoszlása és közbeszerzéseik értéke",x = "Nettó közbeszerzés (Millió Ft)",y = "Közbeszerzések sűrűsége", fill = "Szektor")
+  
+
+df_kozbeszerzes %>% 
+  ggplot(aes(x = nevalue, fill = sector)) +
+  geom_density(adjust = 1L,
+               alpha=0.8) +
+  facet_wrap(vars(sector))+
+  scale_fill_manual(values = c(`1` = "#FBB4AE", 
+                               `2` = "#B6D1DE", `3` = "#D1E1CD", `4` = "#EBD1C9", `5` = "#03FFF3", `6` = "#ECE3C1", `7` = "#FF84B2", 
+                               `8` = "#F2F2F2")) +
+  scale_x_continuous(trans = "log10") +
+  theme_minimal() + 
+  theme(axis.ticks = element_line(linetype = "blank"),
+    axis.title = element_text(family = "serif"),
+    axis.text = element_text(family = "serif"),
+    axis.text.x = element_text(family = "serif"),
+    axis.text.y = element_text(family = "serif"),
+    plot.title = element_text(family = "serif",
+        face = "bold", hjust = 0.5)) +
+  labs(title = "Szektorok megoszlása és közbeszerzéseik értéke",
+    x = "Nettó közbeszerzés (Millió Ft)",
+    y = "Közbeszerzések sűrűsége", fill = "Szektor")+
+  theme(legend.position = "none")
+```
+
+## Vállalatok sikeressége
+
+A tíz legsikeresebb vállatot kiválogattam, az általuk megnyert közbeszerzések száma alapján:
+
+```{r}
+head(sort(table(df_kozbeszerzes$wname_raw),decreasing=T),n=10)
+
+
+```
+
+Ezeknek a cégeknek többsége gyógyszercég, de található a infrastruktúra-építési és mezőgazdasági-élelmezési és ételgyártó kft.-k is.
+
+### Hartmann-Rico
+
+Először a legsikeresebb vállalat, a Hartmann-Rico Hungária kft.sikerességét vizsgáltam meg. A vállalat növekvő tendenciát mutat elnyert közbeszerzések terén. 2016-ig a legtöbb évi 50 közbeszerzésről 2017-ben hirtelen közel 150 megrendelést kapott a kft. 2019-ben nyert legtöbbet, több, mint 150 közbeszerzést.
+
+```{r}
+hartmann <- df_kozbeszerzes %>% 
+  filter(wname_raw == "hartmann-rico hungaria kft.")
+
+
+ggplot(hartmann, aes(x=year_raw))+
+  geom_bar(fill="#4B6E99")+
+  theme_minimal() + 
+  theme(axis.title = element_text(family = "serif"),
+    axis.text = element_text(family = "serif"),
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor.x = element_blank() ) +
+  labs(x = NULL, y = "Elnyert közbeszerzések" )+
+  scale_x_continuous(limits = c(2004,2022), breaks = c(2005:2021))
+```
+
+### Magyar Aszfalt - Duna Aszfalt
+
+A tíz legsikeresebb cégben két aszfaltozó cég is bekerült, ezeknek a potenciális rivalizációjára (vagy oldalkötődésére) voltam kíváncsi.
+
+A Magyar Aszfalt 2010-ig nyert nagy mennyiségű közbeszerzést (többek közt a hatalmas költségvetésű 2007-es autópályafelújítást). 2010-ben több, mint 250 beszerzést nyert, a Duna Aszfalt pedig ekkorra már úgyszintén több, mint 100 beszerzést tudhatott magáénak. 2013 volt az utolsó év, hogy a Magyar Aszfalt kft. közbeszerzést nyert, azóta csak a Duna Aszfalt kft. szerez közbeszerzést.
+
+```{r}
+
+magyar_aszfalt_vs_duna_aszfalt <- df_kozbeszerzes %>% 
+  group_by(year_raw) %>% 
+  summarise(magyar_aszfalt = sum(str_count(wname_raw,"magyar aszfalt kft."), na.rm=T),
+            duna_aszfalt = sum(str_count(wname_raw,"duna aszfalt kft."), na.rm=T))
+
+ggplot(magyar_aszfalt_vs_duna_aszfalt, aes(x=year_raw))+
+  geom_line(aes(y=magyar_aszfalt), color = "#598CA8", size= 0.8, alpha=0.7)+
+  geom_line(aes(y=duna_aszfalt), color = "#F0A037", size= 0.8, alpha=0.7)+
+  scale_x_continuous(limits = c(2004,2022), breaks = c(2005:2021))+
+  scale_y_continuous(limits = c(0,260), breaks = c(0, 50, 100, 150, 200, 250))+
+  theme_minimal()+
+  theme(panel.grid.minor.x = element_blank(),
+        panel.grid.minor.y = element_blank())+
+  theme(plot.subtitle = element_text(family = "serif",
+    face = "italic"), panel.grid.major = element_line(colour = "gray90"),
+    axis.title = element_text(family = "serif"),
+    axis.text = element_text(family = "serif"),
+    plot.title = element_text(family = "serif",
+        face = "bold")) +labs(title = "A Magyar Aszfalt kft. és a Duna Aszfalt kft. elnyert közbeszerzéseinek alakulása",
+    x = NULL, y = "Elnyert közbeszerzések",
+    subtitle = "Kék: Magyar Aszfalt kft.
+Narancs: Duna Aszfalt kft.")
+```
+
+## Lezárás
+
+Munkámban, mint írtam nem korrupciót vizsgáltam, csupán 16 év közbeszerzéseinek általános bemutatását, különböző-kisebb kérdések mentén kíséreltem meg különféle adatvizualizációs módszerekkel. Igyekeztem a lehető leg olvashatóbb-és érthetőbb ábrákat létrehozni, és ha ez sikerült, még érdekes adatokat is bemutatni rajta.
